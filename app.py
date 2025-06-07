@@ -84,6 +84,21 @@ def generate_query(state: MainState, config: RunnableConfig):
     return {"search_query": result.query}
 
 
+@cl.password_auth_callback
+def auth_callback(username: str, password: str) -> cl.User | None:
+    """
+    This function will be called to authenticate users.
+    """
+    if username == os.getenv("CHAINLIT_USERNAME") and password == os.getenv(
+        "CHAINLIT_PASSWORD"
+    ):
+        return cl.User(
+            identifier=username, metadata={"role": "admin", "provider": "credentials"}
+        )
+    else:
+        return None
+
+
 @cl.on_chat_start
 async def start():
     if os.getenv("GOOGLE_API_KEY") is None:
