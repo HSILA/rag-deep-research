@@ -1,0 +1,4 @@
+.step-title::before {
+    content: "" !important;
+    margin-right: 0 !important;
+  }

@@ -1,0 +1,6 @@
+chainlit==2.5.5
+langchain==0.3.25
+langgraph==0.4.8
+langchain-google-genai==2.0.10
+langchain-openai==0.3.21
+google-genai==1.19.0
