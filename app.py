@@ -246,6 +246,33 @@ def finalize_answer(state: MainState, config: RunnableConfig):
     }
 
 
+def get_graph():
+    builder = StateGraph(MainState, config_schema=Configuration)
+    # Nodes
+    builder.add_node("generate_query", generate_query)
+    builder.add_node("web_research", web_research)
+    builder.add_node("reflection", reflection)
+    builder.add_node("finalize_answer", finalize_answer)
+
+    # Edges
+    builder.add_edge(START, "generate_query")
+    # Add conditional edge to continue with search queries in a parallel branch
+    builder.add_conditional_edges(
+        "generate_query", continue_to_web_research, ["web_research"]
+    )
+    # Reflect on the web research
+    builder.add_edge("web_research", "reflection")
+    # Evaluate the research
+    builder.add_conditional_edges(
+        "reflection", evaluate_research, ["web_research", "finalize_answer"]
+    )
+    # Finalize the answer
+    builder.add_edge("finalize_answer", END)
+
+    graph = builder.compile(name="rag-search-agent")
+    return graph
+
+
 @cl.password_auth_callback
 def auth_callback(username: str, password: str) -> cl.User | None:
     """
@@ -279,32 +306,12 @@ async def start():
 
     cl.user_session.set("chat_messages", [])
 
-    builder = StateGraph(MainState, config_schema=Configuration)
-
-    # Nodes
-    builder.add_node("generate_query", generate_query)
-    builder.add_node("web_research", web_research)
-    builder.add_node("reflection", reflection)
-    builder.add_node("finalize_answer", finalize_answer)
-
-    # Edges
-    builder.add_edge(START, "generate_query")
-    # Add conditional edge to continue with search queries in a parallel branch
-    builder.add_conditional_edges(
-        "generate_query", continue_to_web_research, ["web_research"]
-    )
-    # Reflect on the web research
-    builder.add_edge("web_research", "reflection")
-    # Evaluate the research
-    builder.add_conditional_edges(
-        "reflection", evaluate_research, ["web_research", "finalize_answer"]
-    )
-    # Finalize the answer
-    builder.add_edge("finalize_answer", END)
-
-    graph = builder.compile(name="pro-search-agent")
+    graph = get_graph()
 
     cl.user_session.set("graph", graph)
+
+
+graph = get_graph()
 
 
 @cl.set_starters
