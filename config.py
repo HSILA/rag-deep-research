@@ -15,9 +15,28 @@ class Configuration(BaseModel):
         },
     )
 
+    reflection_model: str = Field(
+        default="gemini-2.5-flash-preview-04-17",
+        metadata={
+                "description": "The name of the language model to use for the agent's reflection."
+        },
+    )
+
+    answer_model: str = Field(
+        default="gemini-2.5-pro-preview-06-05",
+        metadata={
+            "description": "The name of the language model to use for the agent's answer."
+        },
+    )
+
     number_of_initial_queries: int = Field(
         default=3,
         metadata={"description": "The number of initial search queries to generate."},
+    )
+
+    max_research_loops: int = Field(
+        default=2,
+        metadata={"description": "The maximum number of research loops to perform."},
     )
 
     @classmethod
