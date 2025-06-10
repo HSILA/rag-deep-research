@@ -38,6 +38,12 @@ class Configuration(BaseModel):
         default=2,
         metadata={"description": "The maximum number of research loops to perform."},
     )
+    embedding_model: str = Field(
+        metadata={"description": "The embedding model used for retrieval and similarity search"},
+    )
+    pinecone_index: str = Field(
+        metadata={"description": "The Pinecone index where vectors are stored."},
+    )
 
     @classmethod
     def from_runnable_config(

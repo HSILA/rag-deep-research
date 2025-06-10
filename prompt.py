@@ -94,3 +94,13 @@ User Context:
 
 Summaries:
 {summaries}"""
+
+rag_prompt = """Answer the following question based only on the provided context:
+Do not refer to the context, avoid phrases like "based on the context", "based on provided info", "based on sources", or similar ones.
+
+Context:
+{context}
+
+Question: {question}
+
+Previous Message Context: {previous_messages}"""

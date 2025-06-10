@@ -1,0 +1,7 @@
+query_generator_model: "gemini-2.5-flash-preview-05-20"
+reflection_model: "gemini-2.5-flash-preview-05-20"
+answer_model: "gemini-2.5-pro-preview-06-05"
+number_of_initial_queries: 4
+max_research_loops: 2
+embedding_model: "text-embedding-3-large"
+pinecone_index: "rag-research-agent"

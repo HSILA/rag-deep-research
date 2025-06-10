@@ -1,0 +1,8 @@
+{
+    "graphs": {
+        "rag-search-agent": "app:graph"
+    },
+    "dependencies": [
+        "."
+    ]
+}

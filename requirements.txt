@@ -4,3 +4,6 @@ langgraph==0.4.8
 langchain-google-genai==2.0.10
 langchain-openai==0.3.21
 google-genai==1.19.0
+langchain-community==0.3.24
+langchain-pinecone==0.2.8
+pinecone[grpc]==7.0.2

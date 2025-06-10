@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import os
+import yaml
+import time
 
 
 from langchain_core.tools import tool
 from langchain.schema.runnable.config import RunnableConfig
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_pinecone import PineconeVectorStore
+from langchain_openai import OpenAIEmbeddings
 from langchain_core.runnables import RunnableConfig
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AnyMessage, AIMessage, HumanMessage
 
 
@@ -24,6 +29,7 @@ from prompt import (
     web_search_prompt,
     reflection_prompt,
     answer_prompt,
+    rag_prompt,
 )
 from utils import (
     generate_chat_context,
@@ -33,6 +39,59 @@ from utils import (
 )
 from state import MainState, WebSearchState, QueryGenerationState, ReflectionState
 from schema import SearchQueryList, Reflection
+
+try:
+    with open("config.yaml") as f:
+        yaml_config = yaml.safe_load(f)
+except FileNotFoundError:
+    yaml_config = None
+
+for key in ["GOOGLE_API_KEY", "PINECONE_API_KEY", "OPENAI_API_KEY"]:
+    if os.getenv(key) is None:
+        raise ValueError(f"{key} is not set")
+
+
+def route(state: MainState) -> str:
+    """Choose branch based on is_research flag."""
+    return "generate_query" if state.get("is_research") else "quick_answer_rag"
+
+
+def quick_answer_rag(state: MainState, config: RunnableConfig) -> MainState:
+    configurable = Configuration.from_runnable_config(config)
+
+    embeddings = OpenAIEmbeddings(model=configurable.embedding_model)
+    vectorstore = PineconeVectorStore.from_existing_index(
+        configurable.pinecone_index, embeddings
+    )
+
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
+    llm = ChatGoogleGenerativeAI(model=configurable.answer_model, temperature=0.1)
+
+    prompt = ChatPromptTemplate.from_template(rag_prompt)
+
+    user_query = None
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, HumanMessage):
+            user_query = msg.content
+            break
+
+    docs = retriever.invoke(user_query)
+
+    formatted_prompt = prompt.invoke(
+        {
+            "context": docs,
+            "question": user_query,
+            "previous_messages": generate_chat_context(state["messages"]),
+        }
+    )
+
+    result = llm.invoke(formatted_prompt)
+    sources = {d.metadata["source"] for d in docs}
+
+    return {
+        "messages": [AIMessage(content=result.content)],
+        "rag_sources": list(sources),
+    }
 
 
 def generate_query(state: MainState, config: RunnableConfig) -> QueryGenerationState:
@@ -250,12 +309,18 @@ def get_graph():
     builder = StateGraph(MainState, config_schema=Configuration)
     # Nodes
     builder.add_node("generate_query", generate_query)
+    builder.add_node("quick_answer_rag", quick_answer_rag)
     builder.add_node("web_research", web_research)
     builder.add_node("reflection", reflection)
     builder.add_node("finalize_answer", finalize_answer)
 
     # Edges
-    builder.add_edge(START, "generate_query")
+    # builder.add_edge(START, "generate_query")
+    builder.add_conditional_edges(
+        START,
+        route,
+        ["generate_query", "quick_answer_rag"],  # ← DISPATCH POINT
+    )
     # Add conditional edge to continue with search queries in a parallel branch
     builder.add_conditional_edges(
         "generate_query", continue_to_web_research, ["web_research"]
@@ -268,6 +333,7 @@ def get_graph():
     )
     # Finalize the answer
     builder.add_edge("finalize_answer", END)
+    builder.add_edge("quick_answer_rag", END)
 
     graph = builder.compile(name="rag-search-agent")
     return graph
@@ -290,16 +356,12 @@ def auth_callback(username: str, password: str) -> cl.User | None:
 
 @cl.on_chat_start
 async def start():
-    if os.getenv("GOOGLE_API_KEY") is None:
-        raise ValueError("GOOGLE_API_KEY is not set")
-    if os.getenv("TAVILY_API_KEY") is None:
-        raise ValueError("TAVILY_API_KEY is not set")
-
     commands = [
         {
             "id": "Research",
             "icon": "globe",
             "description": "Deep research on a subject.",
+            "button": True,
         },
     ]
     await cl.context.emitter.set_commands(commands)
@@ -326,8 +388,12 @@ async def set_starters():
             message="Let’s examine the development of bio-based aqueous dispersions formed by in-situ polymerizing lignin onto cellulose nanofibrils (CNF). Can you walk me through the enzymatic polymerization mechanism, materials characterization methods, and potential applications in sustainable packaging?",
         ),
         cl.Starter(
-            label="Lignin-CWPU-LX Dispersions",
-            message="I want to design a lignin-incorporated, castor oil-based cationic waterborne PU dispersion (CWPU-LX). Help me outline a green synthesis plan, solvent-minimization strategies, and approaches to characterize the dispersion’s stability and performance.",
+            label="Reinforce biodegradable polymers",
+            message="Which metal-oxide nanoparticles are commonly used to reinforce starch-based biodegradable polymers?",
+        ),
+        cl.Starter(
+            label="Polymer Dispersion",
+            message="Tell me about Polymer Dispersion with a focus on sustainability and biobased ingredients",
         ),
     ]
 
@@ -343,13 +409,41 @@ async def main(message: cl.Message):
 
     chat_messages.append(HumanMessage(content=message.content))
 
-    async with cl.Step(name="Deep research ...", type="llm") as step:
-        inputs = {"messages": chat_messages}
+    inputs = {"messages": chat_messages}
 
-        final_state = await graph.ainvoke(inputs)
+    if message.command == "Research":
+        inputs["is_research"] = True
+        step_text = "Deep research ..."
+        step_type = "llm"
+    else:
+        inputs["is_research"] = False
+        step_text = "Retrieving documents ..."
+        step_type = "retrieval"
 
-        new_messages = final_state["messages"][len(chat_messages) :]
+    async with cl.Step(name=step_text, type=step_type) as step:
+        runnable_config = {"configurable": yaml_config} if yaml_config else None
+        now = time.time()
+        final_state = await graph.ainvoke(inputs, runnable_config)
+        elapsed = time.time() - now
         sources = final_state.get("sources_gathered", [])
+        rag_sources = final_state.get("rag_sources", [])
+        new_messages = final_state["messages"][len(chat_messages) :]
+
+        if inputs["is_research"]:
+            step.name = "Research Done in %d mins and %d secs" % divmod(
+                int(elapsed), 60
+            )
+            step.output = f"Analyzed {len(sources)} web pages."
+        else:
+            step.name = "Retrieval Complete!"
+            if rag_sources:
+                bullet_list = "\n".join(f"- {src}" for src in rag_sources)
+                step.output = (
+                    f"{len(rag_sources)} document(s) retrieved:\n{bullet_list}"
+                )
+                step.type = "retrieval"
+            else:
+                step.output = "No documents retrieved."
 
         for m in new_messages:
             if isinstance(m, AIMessage):

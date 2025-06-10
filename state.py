@@ -13,10 +13,12 @@ class MainState(MessagesState):
     search_query: Annotated[list, operator.add]
     web_research_result: Annotated[list, operator.add]
     sources_gathered: Annotated[list, operator.add]
+    rag_sources: list[str]
     initial_search_query_count: int
     max_research_loops: int
     research_loop_count: int
     reasoning_model: str
+    is_research: bool
 
 
 class ReflectionState(TypedDict):
