@@ -20,6 +20,7 @@ from langgraph.graph import START, END
 from langgraph.types import Send
 
 import chainlit as cl
+from chainlit.types import ThreadDict
 from google.genai import Client
 
 from config import Configuration
@@ -414,6 +415,26 @@ async def set_starters():
             message="Tell me about Polymer Dispersion with a focus on sustainability and biobased ingredients",
         ),
     ]
+
+
+@cl.on_chat_resume
+async def on_chat_resume(thread: ThreadDict):
+    cl.user_session.set("chat_history", [])
+
+    graph = get_graph()
+    cl.user_session.set("graph", graph)
+
+    restored: list[HumanMessage | AIMessage] = []
+    for step in thread.get("steps", []):
+        content = step.get("output")
+        if not content:
+            continue
+
+        if step["type"] == "user_message":
+            restored.append(HumanMessage(content=content))
+        elif step["type"] == "assistant_message":
+            restored.append(AIMessage(content=content))
+    cl.user_session.set("chat_messages", restored)
 
 
 @cl.on_message
