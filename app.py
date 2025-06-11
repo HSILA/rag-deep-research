@@ -56,7 +56,7 @@ def route(state: MainState) -> str:
     return "generate_query" if state.get("is_research") else "quick_answer_rag"
 
 
-def quick_answer_rag(state: MainState, config: RunnableConfig) -> MainState:
+async def quick_answer_rag(state: MainState, config: RunnableConfig) -> MainState:
     configurable = Configuration.from_runnable_config(config)
 
     embeddings = OpenAIEmbeddings(model=configurable.embedding_model)
@@ -85,11 +85,20 @@ def quick_answer_rag(state: MainState, config: RunnableConfig) -> MainState:
         }
     )
 
-    result = llm.invoke(formatted_prompt)
+    stream = llm.astream(formatted_prompt)
+    msg = cl.Message(content="")
+
+    async for chunk in stream:
+        if token := chunk.content:
+            await msg.stream_token(token)
+
+    await msg.update()
+    full_response = msg.content
+
     sources = {d.metadata["source"] for d in docs}
 
     return {
-        "messages": [AIMessage(content=result.content)],
+        "messages": [AIMessage(content=full_response)],
         "rag_sources": list(sources),
     }
 
@@ -257,7 +266,7 @@ def evaluate_research(
         ]
 
 
-def finalize_answer(state: MainState, config: RunnableConfig):
+async def finalize_answer(state: MainState, config: RunnableConfig):
     """LangGraph node that finalizes the research summary.
 
     Prepares the final output by deduplicating and formatting sources, then
@@ -288,19 +297,28 @@ def finalize_answer(state: MainState, config: RunnableConfig):
         max_retries=2,
         api_key=os.getenv("GOOGLE_API_KEY"),
     )
-    result = llm.invoke(formatted_prompt)
+    stream = llm.astream(formatted_prompt)
+    msg = cl.Message(content="")
+
+    async for chunk in stream:
+        if token := chunk.content:
+            await msg.stream_token(token)
+
+    for src in state["sources_gathered"]:
+        if src["short_url"] in msg.content:
+            msg.content = msg.content.replace(src["short_url"], src["value"])
+
+    await msg.update()
+    full_summary = msg.content
 
     # Replace the short urls with the original urls and add all used urls to the sources_gathered
     unique_sources = []
     for source in state["sources_gathered"]:
-        if source["short_url"] in result.content:
-            result.content = result.content.replace(
-                source["short_url"], source["value"]
-            )
+        if source["short_url"] in full_summary:
             unique_sources.append(source)
 
     return {
-        "messages": [AIMessage(content=result.content)],
+        "messages": [AIMessage(content=full_summary)],
         "sources_gathered": unique_sources,
     }
 
@@ -389,7 +407,7 @@ async def set_starters():
         ),
         cl.Starter(
             label="Reinforce biodegradable polymers",
-            message="Which metal-oxide nanoparticles are commonly used to reinforce starch-based biodegradable polymers?",
+            message="Which metal-oxide nanoparticles are commonly used to reinforce starch-based biodegradable polymers? Explain in details.",
         ),
         cl.Starter(
             label="Polymer Dispersion",
@@ -405,49 +423,44 @@ async def main(message: cl.Message):
     It decides the execution path based on whether a command was used.
     """
     graph: StateGraph = cl.user_session.get("graph")
-    chat_messages: list[AnyMessage] = cl.user_session.get("chat_messages")
+    chat_messages: list[AnyMessage] = cl.user_session.get("chat_messages", [])
 
     chat_messages.append(HumanMessage(content=message.content))
 
-    inputs = {"messages": chat_messages}
+    inputs = {"messages": chat_messages, "is_research": message.command == "Research"}
 
-    if message.command == "Research":
-        inputs["is_research"] = True
+    if inputs["is_research"]:
         step_text = "Deep research ..."
         step_type = "llm"
     else:
-        inputs["is_research"] = False
-        step_text = "Retrieving documents ..."
-        step_type = "retrieval"
+        step_text = "Thinking ..."
+        step_type = "tool"
 
     async with cl.Step(name=step_text, type=step_type) as step:
         runnable_config = {"configurable": yaml_config} if yaml_config else None
-        now = time.time()
+
+        start = time.time()
         final_state = await graph.ainvoke(inputs, runnable_config)
-        elapsed = time.time() - now
-        sources = final_state.get("sources_gathered", [])
+        elapsed = time.time() - start
+
+        search_sources = final_state.get("sources_gathered", [])
         rag_sources = final_state.get("rag_sources", [])
-        new_messages = final_state["messages"][len(chat_messages) :]
 
         if inputs["is_research"]:
             step.name = "Research Done in %d mins and %d secs" % divmod(
                 int(elapsed), 60
             )
-            step.output = f"Analyzed {len(sources)} web pages."
+            step.output = f"Analyzed {len(search_sources)} web pages."
         else:
             step.name = "Retrieval Complete!"
             if rag_sources:
+                step.type = "tool"
                 bullet_list = "\n".join(f"- {src}" for src in rag_sources)
                 step.output = (
                     f"{len(rag_sources)} document(s) retrieved:\n{bullet_list}"
                 )
-                step.type = "retrieval"
             else:
                 step.output = "No documents retrieved."
-
-        for m in new_messages:
-            if isinstance(m, AIMessage):
-                await cl.Message(content=m.content, author="assistant").send()
 
     cl.user_session.set("chat_messages", final_state["messages"])
 
