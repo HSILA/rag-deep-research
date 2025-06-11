@@ -96,6 +96,7 @@ Summaries:
 {summaries}"""
 
 rag_prompt = """Answer the following question based only on the provided context:
+If the context is not enough to answer the question, or the question is general, answer based on your own knowledge.
 Do not refer to the context, avoid phrases like "based on the context", "based on provided info", "based on sources", or similar ones.
 
 Context:
